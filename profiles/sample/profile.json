@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "id": "sample",
+  "displayName": "Bob",
+  "description": "A local workspace assistant",
+  "systemPrompt": "SYSTEM.md",
+  "defaultHarness": "pi",
+  "models": {},
+  "voice": {
+    "whisperPrompt": null,
+    "piperModelPath": null
+  },
+  "permissions": {
+    "readRoots": ["."],
+    "writeRoots": [],
+    "operatorCommands": [],
+    "webResearch": false
+  },
+  "skillsDirectory": null,
+  "mcpConfig": null,
+  "piExtensions": [],
+  "timeoutMs": 600000
+}

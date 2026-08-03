@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "tickr",
+  "displayName": "Bob for Tickr",
+  "description": "Optional example profile for a Tickr workspace",
+  "systemPrompt": "SYSTEM.md",
+  "defaultHarness": "pi",
+  "models": {
+    "pi": "openai-codex/gpt-5.6-sol",
+    "claude": "claude-opus-4-8"
+  },
+  "voice": {
+    "whisperPrompt": "This conversation is about Tickr, tickr-io, a Rust workflow orchestration engine. Bob is a local assistant powered by Pi or Claude. The workspace contains CONTEXT-MAP.md, ADRs in docs/adr/, multiple Rust crates, and DSLs implemented in Nix and Nickel with .ncl files. Common terms include schema, API, config, refactor, monorepo, async, trait, lifetime, generic, struct, enum, module, Nix, Nickel, NCL, DSL, conductor, executor, workflow, NATS, and PostgreSQL.",
+    "piperModelPath": null
+  },
+  "permissions": {
+    "readRoots": ["."],
+    "writeRoots": ["developer-toolkit", "site"],
+    "operatorCommands": ["just", "curl", "direnv", "jq", "tickr-ctx"],
+    "additionalTools": [
+      "mcp__bob-memory__list_tickr_sessions",
+      "mcp__bob-memory__search_tickr_conversations",
+      "mcp__bob-memory__get_tickr_conversation"
+    ],
+    "webResearch": true
+  },
+  "skillsDirectory": "skills",
+  "mcpConfig": "mcp.json",
+  "piExtensions": ["extensions/pi/index.ts"],
+  "timeoutMs": 600000
+}

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "bob-memory": {
+      "command": "node",
+      "args": ["${PROFILE_DIR}/mcp/bob-memory.ts"],
+      "env": {
+        "DATABASE_PATH": "${DATABASE_PATH}"
+      }
+    }
+  }
+}

@@ -102,6 +102,17 @@ describe('SessionService', () => {
     });
   });
 
+  it('creates an OMP session when selected by a profile or request', () => {
+    const session = service.createSession({
+      title: 'omp chat',
+      agent_harness: 'omp',
+    });
+    expect(session).toMatchObject({
+      agent_harness: 'omp',
+      agent_session_id: null,
+    });
+  });
+
   it('replays only recent successful messages and marks the interrupted user turn', () => {
     const s = service.createSession({ title: 'recovery', agent_harness: 'pi' });
     for (let index = 0; index < 11; index += 1) {

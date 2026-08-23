@@ -12,7 +12,11 @@ import {
   CreateSessionDto,
   UpdateSessionDto,
 } from './session.dto';
-import { type AgentHarness, type AgentUsage } from '../agent/agent.types';
+import {
+  VALID_AGENT_HARNESSES,
+  type AgentHarness,
+  type AgentUsage,
+} from '../agent/agent.types';
 import {
   DEFAULT_PROFILE,
   PROFILE_KEYS,
@@ -24,7 +28,10 @@ import { TurnStore } from '../turn/turn-store';
 import { AgentWorkStore } from '../agent-work/agent-work.store';
 
 function isAgentHarness(value: unknown): value is AgentHarness {
-  return value === 'claude' || value === 'pi';
+  return (
+    typeof value === 'string' &&
+    VALID_AGENT_HARNESSES.has(value as AgentHarness)
+  );
 }
 
 @Injectable()

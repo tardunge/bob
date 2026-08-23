@@ -6,6 +6,7 @@ import {
 } from 'react';
 import type {
   Session,
+  AgentWorkRecord,
   SessionProfile,
   SessionWithMessages,
   Message,
@@ -60,8 +61,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setError(null);
       const session = await sessionApi.getSession(id);
       setCurrentSession(session);
-      // Rehydrate processing from the durable turn record, then clear transient
-      // unread/error dots because the user is now looking at this session.
+      const foreground = session.agent_work.find(
+        (work) =>
+          work.state === 'foreground' ||
+          work.state === 'orphaned' ||
+          (work.state === 'settling' && work.promoted_at === null) ||
+          (work.state === 'succeeded' &&
+            work.stage === 'piper' &&
+            work.promoted_at === null),
+      );
+      const hasFailure = session.agent_work.some((work) =>
+        ['failed', 'timed_out', 'cancelled', 'interrupted', 'orphaned'].includes(
+          work.state,
+        ),
+      );
       setStatuses((prev) => {
         const cur = prev[id] ?? {
           processing: false,
@@ -72,10 +85,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           ...prev,
           [id]: {
             ...cur,
-            processing: session.active_turn?.state === 'processing',
+            processing: Boolean(foreground),
+            foregroundWorkId: foreground?.id,
             hasUnread: false,
-            hasError: false,
-            stage: session.active_turn?.stage ?? undefined,
+            stage: foreground?.stage ?? undefined,
+            hasError: cur.hasError || hasFailure,
           },
         };
       });
@@ -129,6 +143,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const upsertAgentWork = useCallback(
+    (sessionId: string, work: AgentWorkRecord) => {
+      setCurrentSession((prev) => {
+        if (!prev || prev.id !== sessionId) return prev;
+        const withoutWork = prev.agent_work.filter((item) => item.id !== work.id);
+        return { ...prev, agent_work: [work, ...withoutWork].slice(0, 20) };
+      });
+    },
+    [],
+  );
+
   const setSessionStatus = useCallback(
     (sessionId: string, patch: Partial<SessionStatus>) => {
       setStatuses((prev) => {
@@ -157,6 +182,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         updateSessionTitle,
         addMessageToSession,
         setSessionStatus,
+        upsertAgentWork,
         refreshSessions,
       }}
     >

@@ -10,3 +10,7 @@ export const AUDIO_TTL_MS = 24 * 60 * 60 * 1000;
 export function assistantAudioFilename(messageId: number): string {
   return `response-${messageId}.wav`;
 }
+
+export function agentWorkAudioFilename(workId: string): string {
+  return `response-work-${workId}.wav`;
+}

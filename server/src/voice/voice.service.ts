@@ -6,10 +6,15 @@ import { AgentRuntimeError, type AgentHarness } from '../agent/agent.types';
 import { PiperService } from '../piper/piper.service';
 import { SessionService } from '../session/session.service';
 import { JobsService } from '../jobs/jobs.service';
+import { AgentWorkService } from '../agent-work/agent-work.service';
 import { getProfileConfig } from '../profiles';
 import { copyFile, unlink } from 'fs/promises';
 import { join } from 'path';
-import { AUDIO_DIR, assistantAudioFilename } from '../audio/audio.constants';
+import {
+  AUDIO_DIR,
+  agentWorkAudioFilename,
+  assistantAudioFilename,
+} from '../audio/audio.constants';
 
 @Injectable()
 export class VoiceService {
@@ -21,6 +26,7 @@ export class VoiceService {
     private readonly piperService: PiperService,
     private readonly sessionService: SessionService,
     private readonly jobsService: JobsService,
+    private readonly agentWorkService: AgentWorkService,
   ) {}
 
   // Fire-and-forget background processing. The controller has already returned
@@ -28,12 +34,21 @@ export class VoiceService {
   processInBackground(
     audioFilePath: string,
     sessionId: string,
+    jobId: string,
     harness: AgentHarness,
     skill: string | undefined,
     effort: EffortLevel | undefined,
     model: string | undefined,
   ): void {
-    this.run(audioFilePath, sessionId, harness, skill, effort, model).catch((err) => {
+    this.run(
+      audioFilePath,
+      sessionId,
+      jobId,
+      harness,
+      skill,
+      effort,
+      model,
+    ).catch((err) => {
       this.logger.error(`Background job failed for session ${sessionId}:`, err);
     });
   }
@@ -41,22 +56,16 @@ export class VoiceService {
   private async run(
     audioFilePath: string,
     sessionId: string,
+    jobId: string,
     harness: AgentHarness,
     skill: string | undefined,
     effort: EffortLevel | undefined,
     model: string | undefined,
   ): Promise<void> {
-    // Track when the agent call began for the fallback timeout explanation.
-    let agentStartedAt: number | null = null;
-    let agentTimeoutMs = 600_000;
+    const work = this.agentWorkService.forTurn(jobId);
     try {
-      // Look up the session up-front so we can pass the profile's whisper
-      // prompt (vocabulary bias) to transcription. If the session was deleted
-      // mid-flight we'll fail cleanly below.
       const session = this.sessionService.getSession(sessionId);
-      if (!session) {
-        throw new Error(`Session ${sessionId} not found`);
-      }
+      if (!session) throw new Error(`Session ${sessionId} not found`);
       if (session.agent_harness !== harness) {
         throw new Error(
           `Harness mismatch: session uses '${session.agent_harness}', request uses '${harness}'.`,
@@ -72,9 +81,7 @@ export class VoiceService {
       const profile = session.profile;
       const config = getProfileConfig(profile);
       const { whisperPrompt, whisperTimeoutMs, piperModelPath } = config;
-      agentTimeoutMs = config.timeoutMs;
 
-      // Step 1: Whisper
       this.logger.log(
         `Transcribing for session ${sessionId} (whisperPrompt=${whisperPrompt ? 'profile' : 'none'}, timeoutMs=${whisperTimeoutMs})...`,
       );
@@ -85,31 +92,24 @@ export class VoiceService {
       );
       this.logger.log(`Transcription: ${transcription}`);
 
-      // Persist the unmodified transcription, not the skill-prefixed prompt
-      // sent to the selected agent runtime.
       const userMessage = this.sessionService.addMessage(
         sessionId,
         'user',
         transcription,
       );
-
-      // Whisper done → entering the selected agent runtime. Surface the user's turn now (UI
-      // renders it immediately) and advance the stage so the dot/label
-      // reflects what's actually running.
+      this.agentWorkService.setSummary(work.id, transcription);
+      this.agentWorkService.enterAgent(work.id);
       this.jobsService.emitIntermediate({
         sessionId,
         harness,
+        jobId,
         state: 'processing',
         stage: 'agent',
         userMessage,
       });
 
-      // If a skill is selected in the UI, inject the hint on every turn.
-      // "Auto" (empty selection) sends the transcription as-is. Per-turn
-      // injection lets the user switch skills mid-session (e.g. Bob's
-      // one-shot routines) without starting a new session.
       const currentPrompt = skill
-        ? `Apply the "${skill}" skill to this turn. ${transcription}`
+        ? `Apply the \"${skill}\" skill to this turn. ${transcription}`
         : transcription;
       const promptForAgent = recoveringPi
         ? this.sessionService.buildRecoveryPrompt(
@@ -118,113 +118,141 @@ export class VoiceService {
             currentPrompt,
           )
         : currentPrompt;
-
-      // Step 2: agent runtime
-      this.logger.log(
-        `${harness} (skill=${skill ?? 'none'}, effort=${effort ?? 'default'}, model=${model ?? 'profile'}, resume=${Boolean(continuation)}, recovery=${recoveringPi})...`,
+      const prepared = this.agentWorkService.prepare(
+        work.id,
+        promptForAgent,
+        continuation,
       );
-      agentStartedAt = Date.now();
-      const agentResult = await this.agentRuntime.run({
-        userMessage: promptForAgent,
+
+      this.logger.log(
+        `${harness} (skill=${skill ?? 'none'}, effort=${effort ?? 'default'}, model=${model ?? 'profile'}, resume=${Boolean(prepared.continuation)}, recovery=${recoveringPi})...`,
+      );
+      const run = await this.agentRuntime.start({
+        userMessage: prepared.prompt,
         harness,
         profile,
-        config,
+        config: {
+          ...config,
+          writeRoots: JSON.parse(prepared.work.write_roots_json) as string[],
+        },
         mcpConfigPath: config.mcpConfigPath,
-        continuation,
+        continuation: prepared.continuation,
         effort,
         model,
       });
-
-      if (
-        agentResult.continuation &&
-        (agentResult.continuation.sessionId !== continuation?.sessionId ||
-          agentResult.continuation.harness !== continuation?.harness)
-      ) {
-        this.sessionService.updateAgentContinuation(
-          sessionId,
-          agentResult.continuation.harness,
-          agentResult.continuation.sessionId,
-        );
-      }
-      if (recoveringPi && !agentResult.continuation) {
-        this.sessionService.clearAgentRecovery(sessionId);
-      }
-
-      const assistantMessage = this.sessionService.addMessage(
-        sessionId,
-        'assistant',
-        agentResult.displayText,
-        agentResult.usage,
-      );
-
-      // Agent done → entering Piper. Stage transition keeps the SSE socket
-      // active and gives the UI an accurate "Speaking…" indicator.
-      this.jobsService.emitIntermediate({
-        sessionId,
-        harness,
-        state: 'processing',
-        stage: 'piper',
-      });
-
-      // Step 3: Piper — name the output deterministically so the client can
-      // build /api/voice/audio/response-<id>.wav without a DB column.
-      let audioFilename: string | null = null;
       try {
-        const tmpAudioPath = await this.piperService.synthesize(
+        this.agentWorkService.attachRun(work.id, run);
+      } catch (error) {
+        if (run.terminate) {
+          try {
+            await run.terminate();
+          } catch (cleanupError) {
+            throw new AgentRuntimeError(
+              'cleanup_unverified',
+              `Agent process identity could not be persisted and cleanup could not be verified: ${String(cleanupError)}`,
+              cleanupError,
+            );
+          }
+        }
+        throw error;
+      }
+      run.activate?.();
+      const agentResult = await run.result;
+      const completion = this.agentWorkService.claimCompletion(work.id);
+      if (!completion) return;
+      const terminal = this.agentWorkService.finishSuccess(
+        work.id,
+        agentResult,
+        null,
+        false,
+      );
+      if (!terminal.committed || !terminal.message) return;
+      if (!terminal.wasBackground) {
+        this.jobsService.emitIntermediate({
+          sessionId,
+          harness,
+          jobId,
+          state: 'processing',
+          stage: 'piper',
+        });
+      }
+
+      let temporaryAudioPath: string | null = null;
+      try {
+        temporaryAudioPath = await this.piperService.synthesize(
           agentResult.speechText,
           piperModelPath,
         );
-        if (tmpAudioPath) {
-          const targetName = assistantAudioFilename(assistantMessage.id);
-          const targetPath = join(AUDIO_DIR, targetName);
-          await copyFile(tmpAudioPath, targetPath);
-          await unlink(tmpAudioPath).catch(() => {});
-          audioFilename = targetName;
-        }
-      } catch (err) {
+      } catch (error) {
         this.logger.error(
           `Piper failed for session ${sessionId} (text-only response):`,
-          err,
+          error,
         );
       }
 
-      this.jobsService.complete(sessionId, harness, {
+      let stagedAudioFilename: string | null = null;
+      if (temporaryAudioPath) {
+        const targetName = agentWorkAudioFilename(work.id);
+        try {
+          await copyFile(temporaryAudioPath, join(AUDIO_DIR, targetName));
+          stagedAudioFilename = targetName;
+        } catch (error) {
+          this.logger.error(
+            `Could not stage Agent Work audio for session ${sessionId}:`,
+            error,
+          );
+        }
+      }
+
+
+      let audioFilename: string | null = null;
+      if (temporaryAudioPath) {
+        const targetName = assistantAudioFilename(terminal.message.id);
+        try {
+          await copyFile(temporaryAudioPath, join(AUDIO_DIR, targetName));
+          audioFilename = targetName;
+        } catch (error) {
+          this.logger.error(
+            `Could not persist response audio for session ${sessionId}:`,
+            error,
+          );
+        }
+        await unlink(temporaryAudioPath).catch(() => {});
+      }
+      this.agentWorkService.publishSuccess(
+        work.id,
+        stagedAudioFilename,
+        terminal.wasBackground,
+      );
+      if (terminal.wasBackground) return;
+
+      this.jobsService.complete(jobId, {
         userMessage,
-        assistantMessage,
+        assistantMessage: terminal.message,
         audioFilename,
         usage: this.sessionService.getSessionUsage(sessionId),
+        agentWork: this.agentWorkService.get(work.id),
       });
-    } catch (err) {
-      this.logger.error(`Job error for session ${sessionId}:`, err);
-
-      // Persist a failed-turn marker so the gap is explained on a later visit,
-      // instead of the thread silently showing only the user's message. A
-      // Agent work that ran to its timeout gets a timeout-specific note.
-      const timedOut =
-        (err instanceof AgentRuntimeError && err.kind === 'timeout') ||
-        (agentStartedAt !== null &&
-          Date.now() - agentStartedAt >= agentTimeoutMs - 1000);
-      const note = timedOut
-        ? `⚠️ This turn timed out after ${Math.round(agentTimeoutMs / 60_000)} minutes — no response was produced. Try again, or send a shorter/simpler request.`
-        : `⚠️ This turn failed before a response was produced. Try again.`;
-      let errorMessage;
-      try {
-        errorMessage = this.sessionService.addMessage(
-          sessionId,
-          'assistant',
-          note,
-          null,
-          true,
-        );
-      } catch (persistErr) {
-        // Session may have been deleted mid-flight — nothing to attach the
-        // marker to. The SSE failure event below still fires.
-        this.logger.error(
-          `Failed to persist error marker for session ${sessionId}:`,
-          persistErr,
-        );
+    } catch (error) {
+      this.logger.error(`Job error for session ${sessionId}:`, error);
+      if (
+        error instanceof AgentRuntimeError &&
+        error.kind === 'cleanup_unverified'
+      ) {
+        this.agentWorkService.markOrphaned(work.id, String(error));
+        return;
       }
-      this.jobsService.fail(sessionId, harness, String(err), errorMessage);
+      const timedOut =
+        error instanceof AgentRuntimeError && error.kind === 'timeout';
+      const note = timedOut
+        ? `This Agent Work run timed out without producing a response.`
+        : `This Agent Work run failed before producing a response.`;
+      await this.agentWorkService.finishFailure(
+        work.id,
+        timedOut ? 'timed_out' : 'failed',
+        note,
+        String(error),
+      );
     } finally {
       await unlink(audioFilePath).catch(() => {});
     }

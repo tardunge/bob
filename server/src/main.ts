@@ -4,6 +4,7 @@ import { isOfflineTestMode } from './agent/offline-runtime.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.enableShutdownHooks();
 
   const host = process.env.BOB_HOST || '127.0.0.1';
   const port = Number(process.env.BOB_PORT || 5556);

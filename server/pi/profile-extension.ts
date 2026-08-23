@@ -1,9 +1,46 @@
-import { readFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
+function canonicalizeCandidate(path: string, depth = 0): string {
+  if (depth > 40) throw new Error(`Too many symbolic links in write path: ${path}`);
+  const absolute = resolve(path);
+  const root = parse(absolute).root;
+  const segments = absolute.slice(root.length).split(sep).filter(Boolean);
+  let current = root;
+  for (let index = 0; index < segments.length; index += 1) {
+    const candidate = join(current, segments[index]);
+    let stat;
+    try {
+      stat = lstatSync(candidate);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') throw error;
+      return resolve(current, ...segments.slice(index));
+    }
+    if (!stat.isSymbolicLink()) {
+      current = candidate;
+      continue;
+    }
+    const target = readlinkSync(candidate);
+    const absoluteTarget = isAbsolute(target)
+      ? target
+      : resolve(dirname(candidate), target);
+    current = canonicalizeCandidate(absoluteTarget, depth + 1);
+  }
+  return current;
+}
+
 function isInside(path: string, root: string): boolean {
-  const rel = relative(resolve(root), resolve(path));
+  const rel = relative(realpathSync.native(root), canonicalizeCandidate(path));
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 

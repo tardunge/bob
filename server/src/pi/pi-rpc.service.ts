@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { mkdir } from 'fs/promises';
+import { randomUUID } from 'crypto';
 import { join, resolve } from 'path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { StringDecoder } from 'string_decoder';
@@ -9,7 +10,13 @@ import {
   type AgentTurnRequest,
   type AgentTurnResult,
   type AgentUsage,
+  type ManagedAgentRun,
+  type ManagedProcessIdentity,
 } from '../agent/agent.types';
+import {
+  observeProcessBirthMarker,
+  terminateProcessGroup,
+} from '../process/process-supervisor';
 import { cleanForDisplay, cleanForSpeech } from '../agent/response-normalizer';
 
 interface RpcResponse {
@@ -29,9 +36,20 @@ interface RpcEvent {
 @Injectable()
 export class PiRpcService implements AgentRuntime {
   readonly harness = 'pi' as const;
+  readonly capabilities = {
+    background: true,
+    recursiveTermination: true,
+    enforcedWriteRoots: true,
+  } as const;
   private readonly piPath = process.env.BOB_PI_BINARY || 'pi';
 
   async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
+    const managed = await this.startManaged(request);
+    managed.activate?.();
+    return managed.result;
+  }
+
+  async startManaged(request: AgentTurnRequest): Promise<ManagedAgentRun> {
     if (request.harness !== this.harness) {
       throw new AgentRuntimeError(
         'invalid_request',
@@ -39,9 +57,11 @@ export class PiRpcService implements AgentRuntime {
       );
     }
 
-    const sessionDir =
+    const runId = randomUUID();
+    const sessionRoot =
       process.env.BOB_PI_SESSION_DIR ||
       join(resolve(__dirname, '../../..'), '.bob', 'agent-sessions', 'pi');
+    const sessionDir = join(sessionRoot, runId);
     await mkdir(sessionDir, { recursive: true });
 
     const extensionPath = join(
@@ -61,7 +81,7 @@ export class PiRpcService implements AgentRuntime {
       args.push('--extension', profileExtension);
     }
     if (request.continuation?.harness === 'pi') {
-      args.push('--session', request.continuation.sessionId);
+      args.push('--fork', request.continuation.sessionId);
     }
     const model = request.model ?? request.config.models.pi;
     if (model) args.push('--model', model);
@@ -79,13 +99,72 @@ export class PiRpcService implements AgentRuntime {
         BOB_WRITE_ROOTS_JSON: JSON.stringify(request.config.writeRoots),
       },
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
     });
+    if (!child.pid) {
+      throw new AgentRuntimeError(
+        'unavailable',
+        'Pi did not expose a managed process id.',
+      );
+    }
 
+    const rpc = new RpcConnection(child);
+    let birthMarker: string;
     try {
-      const rpc = new RpcConnection(child);
-      // Pi's get_session_stats is session-cumulative, while Bob persists
-      // per-turn usage. Snapshot before prompting so the stored value is the
-      // delta for this turn rather than the entire Pi session repeated again.
+      birthMarker = await observeProcessBirthMarker(child.pid);
+    } catch (error) {
+      try {
+        await terminateProcessGroup(
+          { pid: child.pid, pgid: child.pid, birthMarker: '' },
+          false,
+        );
+      } catch (terminationError) {
+        throw new AgentRuntimeError(
+          'unavailable',
+          `Pi process identity could not be observed and its process group could not be verified stopped: ${String(terminationError)}`,
+        );
+      }
+      throw this.normalizeError(error);
+    }
+    const identity: ManagedProcessIdentity = {
+      pid: child.pid,
+      pgid: child.pid,
+      birthMarker,
+    };
+    let termination: Promise<void> | null = null;
+    const terminate = () => {
+      if (!termination) {
+        termination = terminateProcessGroup(identity).catch((error) => {
+          termination = null;
+          throw error;
+        });
+      }
+      return termination;
+    };
+    let activate!: () => void;
+    const activated = new Promise<void>((resolve) => {
+      activate = resolve;
+    });
+    const result = activated.then(() =>
+      this.consumeManagedRun(request, rpc, terminate),
+    );
+    return {
+      capabilities: this.capabilities,
+      processIdentity: identity,
+      runId,
+      continuationBranch: sessionDir,
+      activate,
+      result,
+      terminate,
+    };
+  }
+
+  private async consumeManagedRun(
+    request: AgentTurnRequest,
+    rpc: RpcConnection,
+    terminate: () => Promise<void>,
+  ): Promise<AgentTurnResult> {
+    try {
       const beforeStats = await rpc.command({ type: 'get_session_stats' });
       const prompt = await rpc.command({
         type: 'prompt',
@@ -111,6 +190,12 @@ export class PiRpcService implements AgentRuntime {
         );
       }
 
+      if (!state.success) {
+        throw new AgentRuntimeError(
+          'execution_failed',
+          state.error || 'Pi did not return continuation state.',
+        );
+      }
       const text = String(lastText.data?.text || '').trim();
       if (!text) {
         throw new AgentRuntimeError(
@@ -135,7 +220,15 @@ export class PiRpcService implements AgentRuntime {
       if (error instanceof AgentRuntimeError) throw error;
       throw this.normalizeError(error);
     } finally {
-      child.kill('SIGTERM');
+      try {
+        await terminate();
+      } catch (error) {
+        throw new AgentRuntimeError(
+          'cleanup_unverified',
+          `Pi process cleanup could not be verified: ${String(error)}`,
+          error,
+        );
+      }
     }
   }
 
@@ -201,18 +294,34 @@ class RpcConnection {
     });
     child.on('error', (error) => this.rejectAll(error));
     child.on('exit', (code, signal) => {
-      // A Pi process exiting cleanly before agent_settled is still a failed
-      // turn. Do not leave Bob's lifecycle stuck in "processing" forever.
-      if (signal !== 'SIGTERM') {
-        this.rejectAll(new Error(`Pi exited with code ${code ?? 'unknown'}`));
-      }
+      this.rejectAll(
+        new Error(
+          `Pi exited with code ${code ?? 'unknown'}${signal ? ` from ${signal}` : ''}`,
+        ),
+      );
     });
   }
 
-  command(command: Record<string, unknown>): Promise<RpcResponse> {
+  command(
+    command: Record<string, unknown>,
+    timeoutMs = 30_000,
+  ): Promise<RpcResponse> {
     const id = `bob-${this.nextId++}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Pi RPC command '${String(command.type)}' timed out.`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
       this.child.stdin.write(JSON.stringify({ ...command, id }) + '\n');
     });
   }

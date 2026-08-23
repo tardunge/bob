@@ -1,4 +1,10 @@
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'fs';
 import { loadEnvFile } from 'process';
 import { isAbsolute, join, resolve } from 'path';
 
@@ -80,6 +86,33 @@ function resolveProfilePath(profilePath: string, configured?: string | null): st
   return isAbsolute(configured) ? configured : resolve(profilePath, configured);
 }
 
+export function canonicalizeWriteRoots(
+  configuredRoots: string[],
+  workspace: string,
+  source: string,
+): string[] {
+  const canonical: string[] = [];
+  for (const configured of configuredRoots) {
+    const absolute = isAbsolute(configured)
+      ? configured
+      : resolve(workspace, configured);
+    let resolved: string;
+    try {
+      resolved = realpathSync.native(absolute);
+      if (!statSync(resolved).isDirectory()) {
+        profileError(source, `write root is not a directory: ${configured}`);
+      }
+    } catch (error) {
+      profileError(
+        source,
+        `write root cannot be resolved: ${configured} (${String(error)})`,
+      );
+    }
+    if (!canonical.includes(resolved)) canonical.push(resolved);
+  }
+  return canonical.sort();
+}
+
 export function resolveWorkspacePath(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
@@ -151,9 +184,13 @@ export function loadProfiles(
       'permissions.readRoots',
       manifestPath,
     );
-    const writeRoots = stringArray(
-      permissions.writeRoots,
-      'permissions.writeRoots',
+    const writeRoots = canonicalizeWriteRoots(
+      stringArray(
+        permissions.writeRoots,
+        'permissions.writeRoots',
+        manifestPath,
+      ),
+      workspace,
       manifestPath,
     );
     const commands = stringArray(

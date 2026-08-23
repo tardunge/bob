@@ -11,12 +11,18 @@ import {
   sendVoiceMessage,
   fetchAudioBlob,
   playAudioBlob,
-  audioUrlForMessage,
+  audioUrlForFilename,
 } from './services/api';
 import { getSessionUsage } from './services/sessionApi';
 import { fetchSkills, type SkillInfo } from './services/skillsApi';
 import { fetchModels, type ModelOption } from './services/modelsApi';
-import type { SessionUsage } from './types/session';
+import type { AgentWorkRecord, SessionUsage } from './types/session';
+import { browserAttention } from './services/attention';
+import { bobChime } from './services/bobChime';
+import {
+  getTerminalAgentWorkAfter,
+  getTerminalSequence,
+} from './services/agentWorkApi';
 
 function MainContent() {
   const {
@@ -31,12 +37,35 @@ function MainContent() {
     currentSession,
     statuses,
     createSession,
+    selectSession,
+    refreshSessions,
     addMessageToSession,
     setSessionStatus,
+    upsertAgentWork,
   } = useSession();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentSessionIdRef = useRef<string | null>(null);
+  const terminalReconcileRef = useRef<Promise<void> | null>(null);
+  const visualTerminalCursorRef = useRef<number | null>(null);
+  const terminalReservationsRef = useRef(
+    new Map<
+      string,
+      {
+        sequence: number;
+        work: AgentWorkRecord;
+        decision: 'pending' | 'full' | 'chime';
+      }
+    >(),
+  );
   currentSessionIdRef.current = currentSession?.id ?? null;
+
+  useEffect(() => {
+    browserAttention.setSelectedConversation(currentSession?.id ?? null);
+  }, [currentSession?.id]);
+
+  useEffect(() => {
+    browserAttention.setRecording(isRecording);
+  }, [isRecording]);
 
   const [usageBySession, setUsageBySession] = useState<
     Record<string, SessionUsage>
@@ -130,50 +159,226 @@ function MainContent() {
     };
   }, [harness]);
 
-  // SSE: every voice job's lifecycle arrives here regardless of which session
-  // is currently visible. We update per-session status and, if the user is
-  // viewing the session that just finished, auto-play the new response.
+  const deliverTerminalAudio = useCallback(
+    (
+      sessionId: string,
+      work: AgentWorkRecord,
+      audioFilename: string | null | undefined,
+    ) => {
+      if (bobChime.wasConsumed(work)) return;
+      const notify = (decision: 'pending' | 'full' | 'chime') => {
+        if (work.terminal_sequence !== null) {
+          terminalReservationsRef.current.set(work.id, {
+            sequence: work.terminal_sequence,
+            work,
+            decision,
+          });
+        }
+        bobChime.notifyTerminal(work, decision);
+      };
+      const initiallyAttending =
+        bobChime.automaticDeliveryEnabled() &&
+        browserAttention.stateFor(sessionId) === 'attending' &&
+        browserAttention.isAudioIdle();
+      if (
+        work.state !== 'succeeded' ||
+        !audioFilename ||
+        !initiallyAttending
+      ) {
+        notify('chime');
+        return;
+      }
+      notify('pending');
+      void (async () => {
+        try {
+          const blob = await fetchAudioBlob(audioUrlForFilename(audioFilename));
+          const stillAttending =
+            !bobChime.wasConsumed(work) &&
+            browserAttention.stateFor(sessionId) === 'attending' &&
+            browserAttention.isAudioIdle();
+          if (!stillAttending) {
+            notify('chime');
+            return;
+          }
+          setIsPlaying(true);
+          const { audio, promise } = playAudioBlob(blob);
+          audioRef.current = audio;
+          notify('full');
+          await promise;
+        } catch (error) {
+          console.warn('Auto-play failed:', error);
+          notify('chime');
+        } finally {
+          audioRef.current = null;
+          setIsPlaying(false);
+        }
+      })();
+    },
+    [],
+  );
+
+  const reconcileTerminalIndicators = useCallback(async () => {
+    if (terminalReconcileRef.current) return terminalReconcileRef.current;
+    const reconciliation = (async () => {
+      const automaticDelivery = bobChime.automaticDeliveryEnabled();
+      let cursor = automaticDelivery
+        ? bobChime.terminalCursor()
+        : visualTerminalCursorRef.current;
+      if (cursor === null) {
+        if (!automaticDelivery) {
+          visualTerminalCursorRef.current = await getTerminalSequence();
+        }
+        return;
+      }
+      const audioCursor = bobChime.terminalCursor();
+      if (audioCursor !== null) {
+        for (const [workId, reservation] of terminalReservationsRef.current) {
+          if (reservation.sequence <= audioCursor) {
+            terminalReservationsRef.current.delete(workId);
+          }
+        }
+      }
+      while (true) {
+        const works = await getTerminalAgentWorkAfter(cursor);
+        if (works.length === 0) return;
+        for (const work of works) {
+          if (work.state === 'succeeded' && work.stage === 'piper') return;
+          if (work.terminal_sequence !== null) {
+            visualTerminalCursorRef.current = Math.max(
+              visualTerminalCursorRef.current ?? work.terminal_sequence,
+              work.terminal_sequence,
+            );
+            if (!automaticDelivery) cursor = visualTerminalCursorRef.current;
+          }
+          const failed = work.state !== 'succeeded';
+          const attending =
+            browserAttention.stateFor(work.session_id) === 'attending';
+          setSessionStatus(work.session_id, {
+            hasUnread: !failed && !attending,
+            hasError: failed && !attending,
+          });
+          upsertAgentWork(work.session_id, work);
+          if (!automaticDelivery || bobChime.wasConsumed(work)) continue;
+          if (
+            work.terminal_sequence === null ||
+            terminalReservationsRef.current.has(work.id)
+          ) {
+            return;
+          }
+          terminalReservationsRef.current.set(work.id, {
+            sequence: work.terminal_sequence,
+            work,
+            decision: 'pending',
+          });
+          deliverTerminalAudio(work.session_id, work, work.audio_filename);
+          return;
+        }
+        if (automaticDelivery || works.length < 100) return;
+      }
+    })();
+    terminalReconcileRef.current = reconciliation;
+    try {
+      await reconciliation;
+    } finally {
+      if (terminalReconcileRef.current === reconciliation) {
+        terminalReconcileRef.current = null;
+      }
+    }
+  }, [deliverTerminalAudio, setSessionStatus, upsertAgentWork]);
+  useEffect(() => {
+    const reconcile = () => void reconcileTerminalIndicators();
+    window.addEventListener('bob-chime-reconcile', reconcile);
+    return () => window.removeEventListener('bob-chime-reconcile', reconcile);
+  }, [reconcileTerminalIndicators]);
+  useEffect(() => {
+    const handoff = () => {
+      for (const reservation of terminalReservationsRef.current.values()) {
+        bobChime.notifyTerminal(reservation.work, reservation.decision);
+      }
+      void reconcileTerminalIndicators();
+    };
+    window.addEventListener('bob-chime-owner-acquired', handoff);
+    return () => window.removeEventListener('bob-chime-owner-acquired', handoff);
+  }, [reconcileTerminalIndicators]);
+
+
   useSessionEvents(
     useCallback(
       (event) => {
+        const isViewing = event.sessionId === currentSessionIdRef.current;
+        const isAttending =
+          browserAttention.stateFor(event.sessionId) === 'attending';
+
+        if (event.kind === 'agent_work') {
+          upsertAgentWork(event.sessionId, event.agentWork);
+          if (event.action === 'promoted') {
+            setSessionStatus(event.sessionId, {
+              processing: false,
+              foregroundWorkId: undefined,
+              stage: undefined,
+            });
+            return;
+          }
+          if (event.action === 'orphaned') {
+            setSessionStatus(event.sessionId, {
+              processing: true,
+              foregroundWorkId: event.agentWork.id,
+              stage: event.agentWork.stage ?? undefined,
+              hasError: true,
+            });
+            if (isViewing && event.error) setError(event.error);
+            return;
+          }
+          if (event.assistantMessage) {
+            addMessageToSession(event.sessionId, event.assistantMessage);
+          }
+          const failed = event.agentWork.state !== 'succeeded';
+          setSessionStatus(event.sessionId, {
+            ...(event.agentWork.promoted_at === null
+              ? {
+                  processing: false,
+                  foregroundWorkId: undefined,
+                  stage: undefined,
+                }
+              : {}),
+            hasUnread: !failed && !isAttending,
+            hasError: failed && !isAttending,
+          });
+          if (isViewing && event.error) setError(event.error);
+          window.dispatchEvent(new Event('bob-chime-reconcile'));
+          return;
+        }
+
+        if (event.agentWork) {
+          upsertAgentWork(event.sessionId, event.agentWork);
+        }
         if (event.state === 'processing') {
           setSessionStatus(event.sessionId, {
             processing: true,
             hasError: false,
+            foregroundWorkId: event.agentWork?.id,
             stage: event.stage,
           });
-          // Intermediate `processing` events may carry the user message once
-          // whisper has finished — render it immediately so the user sees
-          // their turn while the selected agent is still thinking.
           if (event.userMessage) {
             addMessageToSession(event.sessionId, event.userMessage);
           }
           return;
         }
         if (event.state === 'failed') {
-          // A failure produces no reply, so it must NOT raise the green
-          // "new response ready" dot (hasUnread) — that's what made a timed-out
-          // turn look like a published reply that then wasn't there. Raise the
-          // distinct red "turn failed" dot instead, and only when the user
-          // isn't already looking at the session.
-          // The failed-turn marker row (is_error) is durably persisted; append
-          // it so a viewer sees the inline note now, and a later visit reloads
-          // it from the DB.
           if (event.assistantMessage) {
             addMessageToSession(event.sessionId, event.assistantMessage);
           }
           setSessionStatus(event.sessionId, {
             processing: false,
-            hasError: event.sessionId !== currentSessionIdRef.current,
+            foregroundWorkId: undefined,
+            hasError: !isAttending,
             stage: undefined,
           });
-          if (event.sessionId === currentSessionIdRef.current && event.error) {
-            setError(event.error);
-          }
+          if (isViewing && event.error) setError(event.error);
+          if (event.agentWork) bobChime.notifyTerminal(event.agentWork, 'chime');
           return;
         }
-        // state === 'ready'
-        const isViewing = event.sessionId === currentSessionIdRef.current;
+
         if (event.userMessage) {
           addMessageToSession(event.sessionId, event.userMessage);
         }
@@ -186,37 +391,28 @@ function MainContent() {
         }
         setSessionStatus(event.sessionId, {
           processing: false,
-          hasUnread: !isViewing,
+          foregroundWorkId: undefined,
+          hasUnread: !isAttending,
           hasError: false,
           stage: undefined,
         });
 
-        // Auto-play only when the user is looking at this session right now.
-        if (
-          isViewing &&
-          event.assistantMessage &&
-          event.audioFilename
-        ) {
-          (async () => {
-            try {
-              const blob = await fetchAudioBlob(
-                audioUrlForMessage(event.assistantMessage!.id),
-              );
-              setIsPlaying(true);
-              const { audio, promise } = playAudioBlob(blob);
-              audioRef.current = audio;
-              await promise;
-            } catch (err) {
-              console.warn('Auto-play failed:', err);
-            } finally {
-              audioRef.current = null;
-              setIsPlaying(false);
-            }
-          })();
-        }
+        if (!event.agentWork) return;
+        window.dispatchEvent(new Event('bob-chime-reconcile'));
       },
-      [addMessageToSession, setSessionStatus],
+      [
+        addMessageToSession,
+        setSessionStatus,
+        upsertAgentWork,
+      ],
     ),
+    useCallback(() => {
+      void refreshSessions();
+      const selectedSessionId = currentSessionIdRef.current;
+      if (selectedSessionId) void selectSession(selectedSessionId);
+      void reconcileTerminalIndicators();
+      bobChime.reconnect();
+    }, [reconcileTerminalIndicators, refreshSessions, selectSession]),
   );
 
   const handleStopPlaying = useCallback(() => {
@@ -266,6 +462,9 @@ function MainContent() {
       }
     } else {
       setError(null);
+      await bobChime.unlockAudio().catch((error) => {
+        console.warn('Bob Chime audio unlock failed:', error);
+      });
       await startRecording();
     }
   }, [

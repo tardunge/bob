@@ -60,6 +60,11 @@ interface ClaudeCLIResponse {
 @Injectable()
 export class ClaudeService implements AgentRuntime {
   readonly harness = 'claude' as const;
+  readonly capabilities = {
+    background: false,
+    recursiveTermination: false,
+    enforcedWriteRoots: false,
+  } as const;
   private materializeMcpConfig(
     source: string | null | undefined,
     profilePath: string,

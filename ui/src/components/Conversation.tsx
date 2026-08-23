@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm';
 import { useSession } from '../context/session-context';
 import type { Message } from '../types/session';
 import { audioUrlForMessage, fetchAudioBlob, playAudioBlob } from '../services/api';
+import { bobChime } from '../services/bobChime';
+import { AgentWorkList } from './AgentWorkList';
 import { parseServerTimestamp } from '../utils/time';
 
 type PlaybackState = 'idle' | 'loading' | 'playing' | 'expired' | 'error';
@@ -21,6 +23,9 @@ function PlayButton({ messageId }: { messageId: number }) {
     }
     if (state === 'loading') return;
 
+    await bobChime.unlockAudio().catch((error) => {
+      console.warn('Bob Chime audio unlock failed:', error);
+    });
     setState('loading');
     try {
       const blob = await fetchAudioBlob(audioUrlForMessage(messageId));
@@ -195,6 +200,7 @@ export function Conversation() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4">
+      <AgentWorkList />
       {currentSession.messages.length === 0 ? (
         <div className="h-full flex items-center justify-center text-slate-400">
           <div className="text-center">

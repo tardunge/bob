@@ -46,7 +46,7 @@ try {
   form.append('sessionId', session.id);
   form.append('harness', 'pi');
   const accepted = await fetch(`${base}/voice`, { method: 'POST', body: form });
-  if (accepted.status !== 201) throw new Error(await accepted.text());
+  if (accepted.status !== 202) throw new Error(await accepted.text());
 
   let completed;
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -120,7 +120,7 @@ try {
     method: 'POST',
     body: recoveryForm,
   });
-  if (recoveryAccepted.status !== 201) {
+  if (recoveryAccepted.status !== 202) {
     throw new Error(await recoveryAccepted.text());
   }
 

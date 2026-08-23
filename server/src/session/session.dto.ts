@@ -2,6 +2,7 @@ export { type SessionProfile } from '../profiles';
 import type { AgentHarness } from '../agent/agent.types';
 import type { TurnRecord } from '../turn/turn-store';
 import type { SessionProfile } from '../profiles';
+import type { AgentWorkProjection } from '../agent-work/agent-work.types';
 
 export interface Session {
   id: string;
@@ -54,6 +55,7 @@ export interface SessionWithMessages extends Session {
   // Latest durable turn record, allowing clients to recover lifecycle state
   // after an SSE reconnect or server restart.
   active_turn: TurnRecord | null;
+  agent_work: AgentWorkProjection[];
 }
 
 export interface CreateSessionDto {

@@ -8,8 +8,10 @@ import {
 import {
   type AgentHarness,
   type AgentRuntime,
+  type AgentRuntimeCapabilities,
   type AgentTurnRequest,
   type AgentTurnResult,
+  type ManagedAgentRun,
 } from './agent.types';
 
 @Injectable()
@@ -22,6 +24,50 @@ export class AgentRuntimeService {
     private readonly offline: OfflineRuntimeService,
   ) {
     this.runtimes = { claude, pi };
+  }
+  capabilitiesFor(harness: AgentHarness): AgentRuntimeCapabilities {
+    if (isOfflineTestMode()) {
+      return {
+        background: harness === 'pi',
+        recursiveTermination: harness === 'pi',
+        enforcedWriteRoots: harness === 'pi',
+      };
+    }
+    const runtime = this.runtimes[harness];
+    if (!runtime) {
+      throw new BadRequestException(`Unknown agent harness '${String(harness)}'.`);
+    }
+    return runtime.capabilities;
+  }
+
+  async start(request: AgentTurnRequest): Promise<ManagedAgentRun> {
+    if (isOfflineTestMode()) {
+      return {
+        capabilities: this.capabilitiesFor(request.harness),
+        processIdentity: null,
+        runId: null,
+        continuationBranch: null,
+        activate: null,
+        result: this.offline.run(request),
+        terminate: null,
+      };
+    }
+    const runtime = this.runtimes[request.harness];
+    if (!runtime) {
+      throw new BadRequestException(
+        `Unknown agent harness '${String(request.harness)}'.`,
+      );
+    }
+    if (runtime.startManaged) return runtime.startManaged(request);
+    return {
+      capabilities: runtime.capabilities,
+      processIdentity: null,
+      activate: null,
+      runId: null,
+      continuationBranch: null,
+      result: runtime.run(request),
+      terminate: null,
+    };
   }
 
   run(request: AgentTurnRequest): Promise<AgentTurnResult> {

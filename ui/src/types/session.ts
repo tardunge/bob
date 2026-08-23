@@ -27,6 +27,7 @@ export interface Message {
 export interface SessionWithMessages extends Session {
   messages: Message[];
   active_turn: TurnRecord | null;
+  agent_work: AgentWorkRecord[];
 }
 
 // POST /api/voice now returns immediately; actual work runs in the background
@@ -46,6 +47,7 @@ export type TurnState = 'processing' | 'completed' | 'failed';
 export interface TurnRecord {
   id: string;
   session_id: string;
+  harness: AgentHarness;
   state: TurnState;
   stage: JobStage | null;
   error: string | null;
@@ -70,7 +72,52 @@ export interface SessionUsage {
   } | null;
 }
 
-export interface SessionEvent {
+export type AgentWorkState =
+  | 'foreground'
+  | 'settling'
+  | 'background'
+  | 'orphaned'
+  | 'succeeded'
+  | 'failed'
+  | 'timed_out'
+  | 'cancelled'
+  | 'interrupted';
+
+export interface AgentWorkRecord {
+  id: string;
+  turn_id: string;
+  session_id: string;
+  harness: AgentHarness;
+  state: AgentWorkState;
+  stage: JobStage | null;
+  background_supported: number;
+  base_revision: number;
+  profile_timeout_ms: number;
+  profile_deadline_at_ms: number;
+  promotion_due_at_ms: number | null;
+  adapter_run_id: string | null;
+  continuation_branch: string | null;
+  summary: string | null;
+  audio_filename: string | null;
+  promoted_at: string | null;
+  completed_at: string | null;
+  error: string | null;
+  run_pid: number | null;
+  run_pgid: number | null;
+  process_birth_marker: string | null;
+  speech_suppressed: number;
+  write_roots_json: string;
+  write_roots: string[];
+  read_only_reason: string | null;
+  terminal_sequence: number | null;
+  message_id: number | null;
+  cancellable: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TurnSessionEvent {
+  kind: 'turn';
   sessionId: string;
   harness: AgentHarness;
   jobId?: string;
@@ -81,4 +128,20 @@ export interface SessionEvent {
   audioFilename?: string | null;
   usage?: SessionUsage;
   error?: string;
+  agentWork?: AgentWorkRecord;
+  speechSuppressed?: boolean;
 }
+
+export interface AgentWorkSessionEvent {
+  kind: 'agent_work';
+  sessionId: string;
+  harness: AgentHarness;
+  agentWork: AgentWorkRecord;
+  action: 'promoted' | 'terminal' | 'orphaned';
+  assistantMessage?: Message;
+  audioFilename?: string | null;
+  speechSuppressed?: boolean;
+  error?: string;
+}
+
+export type SessionEvent = TurnSessionEvent | AgentWorkSessionEvent;

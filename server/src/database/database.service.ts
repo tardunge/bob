@@ -25,6 +25,7 @@ export class DatabaseService implements OnModuleInit {
         agent_harness TEXT NOT NULL DEFAULT 'pi',
         agent_session_id TEXT,
         agent_recovery_pending INTEGER NOT NULL DEFAULT 0,
+        canonical_revision INTEGER NOT NULL DEFAULT 0,
         title TEXT NOT NULL,
         profile TEXT NOT NULL DEFAULT 'sample',
         created_at TEXT DEFAULT (datetime('now')),
@@ -59,6 +60,7 @@ export class DatabaseService implements OnModuleInit {
 
       CREATE INDEX IF NOT EXISTS idx_turns_session_id ON turns(session_id);
       CREATE INDEX IF NOT EXISTS idx_turns_processing ON turns(session_id, state);
+
     `);
 
     const turnsTable = this.db
@@ -133,6 +135,11 @@ export class DatabaseService implements OnModuleInit {
         `ALTER TABLE sessions ADD COLUMN agent_recovery_pending INTEGER NOT NULL DEFAULT 0`,
       );
     }
+    if (!sessionColNames.has('canonical_revision')) {
+      this.db.exec(
+        `ALTER TABLE sessions ADD COLUMN canonical_revision INTEGER NOT NULL DEFAULT 0`,
+      );
+    }
     // Existing Bob sessions resume through the old Claude-specific column;
     // copy it once into the neutral continuation column during migration.
     this.db.exec(`
@@ -163,6 +170,94 @@ export class DatabaseService implements OnModuleInit {
       this.db.exec(
         `ALTER TABLE messages ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0`,
       );
+    }
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_work (
+        id TEXT PRIMARY KEY,
+        turn_id TEXT NOT NULL UNIQUE REFERENCES turns(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        harness TEXT NOT NULL CHECK(harness IN ('claude', 'pi')),
+        state TEXT NOT NULL CHECK(state IN (
+          'foreground', 'settling', 'background', 'orphaned',
+          'succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'
+        )),
+        stage TEXT CHECK(stage IN ('whisper', 'agent', 'piper')),
+        background_supported INTEGER NOT NULL,
+        base_revision INTEGER NOT NULL,
+        profile_timeout_ms INTEGER NOT NULL,
+        profile_deadline_at_ms INTEGER NOT NULL DEFAULT 0,
+        promotion_due_at_ms INTEGER,
+        promoted_at TEXT,
+        completed_at TEXT,
+        error TEXT,
+        adapter_run_id TEXT,
+        continuation_branch TEXT,
+        summary TEXT,
+        audio_filename TEXT,
+        run_pid INTEGER,
+        run_pgid INTEGER,
+        process_birth_marker TEXT,
+        write_roots_json TEXT NOT NULL,
+        read_only_reason TEXT,
+        terminal_sequence INTEGER UNIQUE,
+        message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        speech_suppressed INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_agent_work_session
+        ON agent_work(session_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_agent_work_active
+        ON agent_work(state, session_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_work_terminal_sequence
+        ON agent_work(terminal_sequence);
+
+      CREATE TABLE IF NOT EXISTS background_callbacks (
+        id TEXT PRIMARY KEY,
+        agent_work_id TEXT NOT NULL UNIQUE REFERENCES agent_work(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        terminal_sequence INTEGER NOT NULL UNIQUE,
+        outcome TEXT NOT NULL CHECK(outcome IN (
+          'succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted'
+        )),
+        content TEXT NOT NULL,
+        message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        delivery_state TEXT NOT NULL DEFAULT 'pending'
+          CHECK(delivery_state IN ('pending', 'claimed', 'acknowledged')),
+        claim_turn_id TEXT REFERENCES turns(id) ON DELETE SET NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        acknowledged_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_background_callbacks_pending
+        ON background_callbacks(session_id, delivery_state, terminal_sequence);
+
+      CREATE TABLE IF NOT EXISTS terminal_sequence (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        value INTEGER NOT NULL
+      );
+      INSERT OR IGNORE INTO terminal_sequence(singleton, value) VALUES (1, 0);
+    `);
+
+    const agentWorkCols = this.db
+      .prepare(`PRAGMA table_info(agent_work)`)
+      .all() as Array<{ name: string }>;
+    if (!agentWorkCols.some((c) => c.name === 'speech_suppressed')) {
+      this.db.exec(
+        `ALTER TABLE agent_work ADD COLUMN speech_suppressed INTEGER NOT NULL DEFAULT 0`,
+      );
+    }
+    for (const name of [
+      'adapter_run_id',
+      'continuation_branch',
+      'summary',
+      'audio_filename',
+    ]) {
+      if (!agentWorkCols.some((column) => column.name === name)) {
+        this.db.exec(`ALTER TABLE agent_work ADD COLUMN ${name} TEXT`);
+      }
     }
 
     console.log('Database schema initialized');

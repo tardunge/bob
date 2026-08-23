@@ -23,7 +23,8 @@ export type AgentFailureKind =
   | 'timeout'
   | 'unavailable'
   | 'invalid_request'
-  | 'execution_failed';
+  | 'execution_failed'
+  | 'cleanup_unverified';
 
 export interface AgentContinuation {
   harness: AgentHarness;
@@ -39,6 +40,27 @@ export interface AgentUsage {
   contextWindow: number;
   /** Actual current context size when the provider reports it (Pi). */
   contextTokens?: number;
+}
+export interface AgentRuntimeCapabilities {
+  background: boolean;
+  recursiveTermination: boolean;
+  enforcedWriteRoots: boolean;
+}
+
+export interface ManagedProcessIdentity {
+  pid: number;
+  pgid: number;
+  birthMarker: string;
+}
+
+export interface ManagedAgentRun {
+  capabilities: AgentRuntimeCapabilities;
+  processIdentity: ManagedProcessIdentity | null;
+  runId: string | null;
+  continuationBranch: string | null;
+  activate: (() => void) | null;
+  result: Promise<AgentTurnResult>;
+  terminate: (() => Promise<void>) | null;
 }
 
 export interface AgentTurnRequest {
@@ -61,7 +83,9 @@ export interface AgentTurnResult {
 
 export interface AgentRuntime {
   readonly harness: AgentHarness;
+  readonly capabilities: AgentRuntimeCapabilities;
   run(request: AgentTurnRequest): Promise<AgentTurnResult>;
+  startManaged?(request: AgentTurnRequest): Promise<ManagedAgentRun>;
 }
 
 export class AgentRuntimeError extends Error {

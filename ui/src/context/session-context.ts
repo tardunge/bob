@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 import type {
+  AgentWorkRecord,
   JobStage,
   Message,
   Session,
@@ -11,6 +12,7 @@ export interface SessionStatus {
   processing: boolean;
   hasUnread: boolean;
   hasError: boolean;
+  foregroundWorkId?: string;
   stage?: JobStage;
 }
 
@@ -28,6 +30,7 @@ export interface SessionContextValue {
   deleteSession: (id: string) => Promise<void>;
   updateSessionTitle: (id: string, title: string) => Promise<void>;
   addMessageToSession: (sessionId: string, message: Message) => void;
+  upsertAgentWork: (sessionId: string, work: AgentWorkRecord) => void;
   setSessionStatus: (
     sessionId: string,
     patch: Partial<SessionStatus>,

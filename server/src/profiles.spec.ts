@@ -7,7 +7,14 @@ import {
   resolveProfilesPath,
   resolveWorkspacePath,
 } from './profiles';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
@@ -41,6 +48,8 @@ describe('profiles', () => {
   it('loads prompts, permissions, skills, and extensions relative to a profile', () => {
     const root = mkdtempSync(join(tmpdir(), 'bob-profile-test-'));
     const profile = join(root, 'custom');
+    const workspace = join(root, 'workspace');
+    mkdirSync(join(workspace, 'docs'), { recursive: true });
     mkdirSync(join(profile, 'skills'), { recursive: true });
     mkdirSync(join(profile, 'extensions'), { recursive: true });
     writeFileSync(join(profile, 'SYSTEM.md'), 'Custom prompt');
@@ -67,11 +76,13 @@ describe('profiles', () => {
     try {
       const loaded = loadProfiles({
         BOB_PROFILES_PATH: root,
-        BOB_WORKSPACE_PATH: '/workspace',
+        BOB_WORKSPACE_PATH: workspace,
       }).custom;
       expect(loaded.systemPrompt).toBe('Custom prompt');
-      expect(loaded.cwd).toBe('/workspace');
-      expect(loaded.writeRoots).toEqual(['docs']);
+      expect(loaded.cwd).toBe(workspace);
+      expect(loaded.writeRoots).toEqual([
+        realpathSync.native(join(workspace, 'docs')),
+      ]);
       expect(loaded.allowedTools).toEqual([
         'WebSearch',
         'WebFetch',
@@ -87,6 +98,47 @@ describe('profiles', () => {
     }
   });
 
+
+  it('canonicalizes symlinked write roots and rejects missing roots', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bob-profile-roots-'));
+    const profiles = join(root, 'profiles');
+    const profile = join(profiles, 'custom');
+    const workspace = join(root, 'workspace');
+    const actual = join(workspace, 'actual');
+    mkdirSync(profile, { recursive: true });
+    mkdirSync(actual, { recursive: true });
+    symlinkSync(actual, join(workspace, 'linked'));
+    const manifest = {
+      version: 1,
+      id: 'custom',
+      displayName: 'Custom',
+      permissions: { writeRoots: ['linked'] },
+    };
+    writeFileSync(join(profile, 'profile.json'), JSON.stringify(manifest));
+    try {
+      const loaded = loadProfiles({
+        BOB_PROFILES_PATH: profiles,
+        BOB_WORKSPACE_PATH: workspace,
+      });
+      expect(loaded.custom.writeRoots).toEqual([realpathSync.native(actual)]);
+
+      writeFileSync(
+        join(profile, 'profile.json'),
+        JSON.stringify({
+          ...manifest,
+          permissions: { writeRoots: ['missing'] },
+        }),
+      );
+      expect(() =>
+        loadProfiles({
+          BOB_PROFILES_PATH: profiles,
+          BOB_WORKSPACE_PATH: workspace,
+        }),
+      ).toThrow(/write root cannot be resolved/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it('rejects a profile id that does not match its directory', () => {
     const root = mkdtempSync(join(tmpdir(), 'bob-profile-test-'));
     const profile = join(root, 'directory-name');

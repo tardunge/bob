@@ -37,6 +37,10 @@ describe('TurnStore', () => {
     expect(turn).toMatchObject({ state: 'processing', stage: 'whisper' });
     expect(turns.setStage(turn.id, 'agent')).toMatchObject({ stage: 'agent' });
     expect(turns.complete(turn.id)).toMatchObject({ state: 'completed', stage: null });
+    expect(turns.setStage(turn.id, 'piper')).toMatchObject({
+      state: 'completed',
+      stage: null,
+    });
   });
 
   it('reconciles processing turns after a restart', () => {

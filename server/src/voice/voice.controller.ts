@@ -8,6 +8,7 @@ import {
   Param,
   Res,
   HttpException,
+  HttpCode,
   HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -39,6 +40,7 @@ export class VoiceController {
   ) {}
 
   @Post()
+  @HttpCode(HttpStatus.ACCEPTED)
   @UseInterceptors(
     FileInterceptor('audio', {
       storage: diskStorage({
@@ -125,6 +127,7 @@ export class VoiceController {
     this.voiceService.processInBackground(
       file.path,
       sessionId,
+      jobId,
       agentHarness,
       skill,
       effortLevel,

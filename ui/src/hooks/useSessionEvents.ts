@@ -4,14 +4,20 @@ import type { SessionEvent } from '../types/session';
 // Opens one SSE connection on mount and routes every event to the current
 // handler via a ref, so changing the handler doesn't reconnect the stream.
 // EventSource auto-reconnects on transient errors — no extra logic needed.
-export function useSessionEvents(handler: (event: SessionEvent) => void): void {
+export function useSessionEvents(
+  handler: (event: SessionEvent) => void,
+  onOpen?: () => void,
+): void {
   const handlerRef = useRef(handler);
+  const onOpenRef = useRef(onOpen);
   useEffect(() => {
     handlerRef.current = handler;
-  }, [handler]);
+    onOpenRef.current = onOpen;
+  }, [handler, onOpen]);
 
   useEffect(() => {
     const source = new EventSource('/api/events');
+    source.onopen = () => onOpenRef.current?.();
     source.onmessage = (ev) => {
       try {
         const event: SessionEvent = JSON.parse(ev.data);

@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import {
   Session,
@@ -17,6 +21,7 @@ import {
 } from '../profiles';
 import { randomUUID } from 'crypto';
 import { TurnStore } from '../turn/turn-store';
+import { AgentWorkStore } from '../agent-work/agent-work.store';
 
 function isAgentHarness(value: unknown): value is AgentHarness {
   return value === 'claude' || value === 'pi';
@@ -92,13 +97,18 @@ export class SessionService {
     `);
     const messages = messagesStmt.all(id) as Message[];
     const active_turn = new TurnStore(this.db).latestForSession(id);
+    const agent_work = new AgentWorkStore(this.db).listForSession(id);
 
-    return { ...session, messages, active_turn };
+    return { ...session, messages, active_turn, agent_work };
   }
 
   updateSession(id: string, dto: UpdateSessionDto): Session | null {
     const updates: string[] = [];
     const values: (string | null)[] = [];
+    const canonicalMutation =
+      dto.claude_session_id !== undefined ||
+      dto.agent_session_id !== undefined ||
+      dto.agent_harness !== undefined;
 
     if (dto.title !== undefined) {
       updates.push('title = ?');
@@ -124,6 +134,9 @@ export class SessionService {
 
     if (updates.length === 0) {
       return this.getSession(id);
+    }
+    if (canonicalMutation) {
+      updates.push('canonical_revision = canonical_revision + 1');
     }
 
     updates.push("updated_at = datetime('now')");
@@ -152,7 +165,8 @@ export class SessionService {
     this.db
       .prepare(
         `UPDATE sessions
-         SET agent_recovery_pending = 0, agent_session_id = NULL
+         SET agent_recovery_pending = 0, agent_session_id = NULL,
+             canonical_revision = canonical_revision + 1
          WHERE id = ?`,
       )
       .run(id);
@@ -171,6 +185,7 @@ export class SessionService {
       SET agent_harness = ?, agent_session_id = ?,
           agent_recovery_pending = 0,
           claude_session_id = CASE WHEN ? = 'claude' THEN ? ELSE claude_session_id END,
+          canonical_revision = canonical_revision + 1,
           updated_at = datetime('now')
       WHERE id = ?
     `);
@@ -179,6 +194,19 @@ export class SessionService {
   }
 
   deleteSession(id: string): boolean {
+    const active = this.db
+      .prepare(
+        `SELECT 1 FROM agent_work
+         WHERE session_id = ?
+           AND state IN ('foreground', 'settling', 'background', 'orphaned')
+         LIMIT 1`,
+      )
+      .get(id);
+    if (active) {
+      throw new ConflictException(
+        'Cancel active Agent Work before deleting this Conversation.',
+      );
+    }
     const stmt = this.db.prepare('DELETE FROM sessions WHERE id = ?');
     const result = stmt.run(id);
     return result.changes > 0;

@@ -1,4 +1,5 @@
 import type { AgentHarness, VoiceAccepted } from '../types/session';
+import { browserAttention } from './attention';
 
 const API_BASE_URL = '/api';
 
@@ -40,8 +41,12 @@ export async function sendVoiceMessage(
   return response.json();
 }
 
+export function audioUrlForFilename(filename: string): string {
+  return `${API_BASE_URL}/voice/audio/${encodeURIComponent(filename)}`;
+}
+
 export function audioUrlForMessage(messageId: number): string {
-  return `${API_BASE_URL}/voice/audio/response-${messageId}.wav`;
+  return audioUrlForFilename(`response-${messageId}.wav`);
 }
 
 export async function fetchAudioBlob(audioUrl: string): Promise<Blob> {
@@ -58,31 +63,27 @@ export function playAudioBlob(audioBlob: Blob): {
 } {
   const audioUrl = URL.createObjectURL(audioBlob);
   const audio = new Audio(audioUrl);
+  const endAudio = browserAttention.beginAudio();
+  let settled = false;
 
   const promise = new Promise<void>((resolve, reject) => {
-    audio.onended = () => {
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
       URL.revokeObjectURL(audioUrl);
-      resolve();
+      endAudio();
+      if (error) reject(error);
+      else resolve();
     };
+    audio.onended = () => finish();
+    audio.onpause = () => finish();
+    audio.onerror = (error) => finish(error);
 
-    audio.onpause = () => {
-      URL.revokeObjectURL(audioUrl);
-      resolve();
-    };
-
-    audio.onerror = (error) => {
-      URL.revokeObjectURL(audioUrl);
-      reject(error);
-    };
-
-    audio.play().catch((err) => {
-      URL.revokeObjectURL(audioUrl);
-      if (err instanceof DOMException && err.name === 'NotAllowedError') {
-        console.warn('Audio playback blocked by autoplay policy:', err);
-        resolve();
-      } else {
-        reject(err);
+    audio.play().catch((error) => {
+      if (error instanceof DOMException && error.name === 'NotAllowedError') {
+        console.warn('Audio playback blocked by autoplay policy:', error);
       }
+      finish(error);
     });
   });
 

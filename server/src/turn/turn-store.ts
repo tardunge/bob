@@ -59,7 +59,7 @@ export class TurnStore {
   setStage(id: string, stage: TurnStage): TurnRecord | null {
     this.db
       .prepare(
-        `UPDATE turns SET state = 'processing', stage = ?, error = NULL, updated_at = datetime('now') WHERE id = ?`,
+        `UPDATE turns SET stage = ?, error = NULL, updated_at = datetime('now') WHERE id = ? AND state = 'processing'`,
       )
       .run(stage, id);
     return this.get(id);
@@ -83,8 +83,13 @@ export class TurnStore {
     return this.get(id);
   }
 
-  reconcileProcessing(reason: string): number {
+  reconcileProcessing(reason: string, legacyOnly = false): number {
     return this.db.transaction(() => {
+      const legacyFilter = legacyOnly
+        ? ` AND NOT EXISTS (
+              SELECT 1 FROM agent_work WHERE agent_work.turn_id = turns.id
+            )`
+        : '';
       this.db.exec(`
         UPDATE sessions
         SET agent_recovery_pending = 1
@@ -92,12 +97,14 @@ export class TurnStore {
           AND id IN (
             SELECT DISTINCT session_id
             FROM turns
-            WHERE state = 'processing' AND harness = 'pi'
+            WHERE state = 'processing' AND harness = 'pi'${legacyFilter}
           )
       `);
       const result = this.db
         .prepare(
-          `UPDATE turns SET state = 'failed', stage = NULL, error = ?, updated_at = datetime('now') WHERE state = 'processing'`,
+          `UPDATE turns
+           SET state = 'failed', stage = NULL, error = ?, updated_at = datetime('now')
+           WHERE state = 'processing'${legacyFilter}`,
         )
         .run(reason);
       return result.changes;

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { AgentTurnRequest, AgentTurnResult } from './agent.types';
+import { setTimeout as delay } from 'timers/promises';
 
 export function isOfflineTestMode(
   env: NodeJS.ProcessEnv = process.env,
@@ -10,6 +11,10 @@ export function isOfflineTestMode(
 @Injectable()
 export class OfflineRuntimeService {
   async run(request: AgentTurnRequest): Promise<AgentTurnResult> {
+    const configuredDelay = Number(process.env.BOB_TEST_AGENT_DELAY_MS ?? 0);
+    if (Number.isFinite(configuredDelay) && configuredDelay > 0) {
+      await delay(configuredDelay);
+    }
     const text = `Offline test response: ${request.userMessage}`;
     return {
       displayText: text,

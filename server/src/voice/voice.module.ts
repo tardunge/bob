@@ -6,9 +6,17 @@ import { AgentModule } from '../agent/agent.module';
 import { PiperModule } from '../piper/piper.module';
 import { SessionModule } from '../session/session.module';
 import { JobsModule } from '../jobs/jobs.module';
+import { AgentWorkModule } from '../agent-work/agent-work.module';
 
 @Module({
-  imports: [WhisperModule, AgentModule, PiperModule, SessionModule, JobsModule],
+  imports: [
+    WhisperModule,
+    AgentModule,
+    AgentWorkModule,
+    PiperModule,
+    SessionModule,
+    JobsModule,
+  ],
   controllers: [VoiceController],
   providers: [VoiceService],
 })

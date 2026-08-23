@@ -18,9 +18,9 @@
     "writeRoots": ["developer-toolkit", "site"],
     "operatorCommands": ["just", "curl", "direnv", "jq", "tickr-ctx"],
     "additionalTools": [
-      "mcp__bob-memory__list_tickr_sessions",
-      "mcp__bob-memory__search_tickr_conversations",
-      "mcp__bob-memory__get_tickr_conversation"
+      "mcp__bob-memory__list_conversations",
+      "mcp__bob-memory__search_conversations",
+      "mcp__bob-memory__get_conversation"
     ],
     "webResearch": true
   },

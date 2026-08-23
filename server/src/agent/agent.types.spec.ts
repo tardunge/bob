@@ -11,9 +11,13 @@ describe('getDefaultAgentHarness', () => {
     );
   });
 
-  it('rejects unsupported harness names, including OMP', () => {
-    expect(() => getDefaultAgentHarness({ BOB_AGENT_HARNESS: 'omp' })).toThrow(
-      /Valid harnesses: claude, pi/,
+  it('allows the optional OMP harness', () => {
+    expect(getDefaultAgentHarness({ BOB_AGENT_HARNESS: 'omp' })).toBe('omp');
+  });
+
+  it('rejects unsupported harness names', () => {
+    expect(() => getDefaultAgentHarness({ BOB_AGENT_HARNESS: 'codex' })).toThrow(
+      /Valid harnesses: claude, omp, pi/,
     );
   });
 });

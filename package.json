@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Local voice assistant with Pi and optional Claude CLI",
+  "description": "Local voice assistant for Pi, OMP, and Claude CLI",
   "license": "MIT",
   "scripts": {
     "dev": "concurrently \"npm run dev:ui\" \"npm run dev:server\"",
@@ -13,6 +13,8 @@
     "build:ui": "cd ui && npm run build",
     "build:server": "cd server && npm run build",
     "install:all": "npm install && cd ui && npm install && cd ../server && npm install",
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "smoke:offline": "cd server && npm run smoke:offline"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 export type SessionProfile = string;
-export type AgentHarness = 'claude' | 'pi';
+export type AgentHarness = 'claude' | 'omp' | 'pi';
 
 export interface Session {
   id: string;

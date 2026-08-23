@@ -1,5 +1,35 @@
 # Installation
 
+## Prerequisites
+
+| Requirement | Baseline |
+|---|---|
+| Node.js | 22 or newer |
+| npm | Included with Node.js |
+| Agent harness | Pi (default), OMP, or Claude CLI |
+| Transcription | `whisper-cli` plus a compatible `.bin` model |
+| Audio conversion | FFmpeg |
+| Speech | Piper plus a compatible `.onnx` voice |
+
+The speech tools are required for voice turns. The deterministic offline smoke
+test runs without a model provider or speech process.
+
+## Guided setup
+
+Install dependencies, run the configuration wizard, and validate the result:
+
+```bash
+npm run install:all
+npm run setup
+npm run doctor
+npm run smoke:offline
+```
+
+The wizard detects installed harnesses, selects platform-standard profile and
+data directories, copies the read-only sample profile, and writes the ignored
+`.env` file. It never enables write access, remote binding, Headroom, or
+provider-backed requests.
+
 ## Agent-assisted setup
 
 If this repository is open in Claude Code, Pi, Codex CLI, or another coding agent, give it this prompt from the repository root:
@@ -19,14 +49,14 @@ The setup agent's goal is a working, private, localhost-only Bob installation—
 Before asking the user anything, the agent must:
 
 1. Detect the operating system, architecture, shell, repository root, Node/npm versions, available package managers, and occupied Bob ports.
-2. Locate existing `pi`, `claude`, `whisper-cli`, `ffmpeg`, and `piper` executables with the shell or platform command lookup.
+2. Locate existing `pi`, `omp`, `claude`, `whisper-cli`, `ffmpeg`, and `piper` executables with the shell or platform command lookup.
 3. Look for existing Whisper `.bin` and Piper `.onnx` models in standard user data directories and alongside any installed speech tools.
 4. Check whether `.env` already exists. Preserve valid settings and never print credentials or copy them into tracked files.
 5. Check the configured and platform-standard Bob profile/data directories before creating another convention.
 
 Use these defaults without asking:
 
-- Pi harness; Claude CLI only when explicitly requested or Pi cannot be used.
+- Pi harness; OMP and Claude CLI are optional alternatives.
 - The bundled `sample` profile as the source for a user-owned profile.
 - Read-only workspace access, no operator commands, and no web research.
 - `127.0.0.1:5555` for the UI and `127.0.0.1:5556` for the API.
@@ -37,7 +67,7 @@ Use these defaults without asking:
 After discovery, ask one consolidated question containing only unresolved user decisions:
 
 1. **Workspace:** ask for the workspace directory only when it cannot be inferred unambiguously from the user's request or surrounding directories.
-2. **Harness:** ask which harness to install only when neither Pi nor Claude is usable. Otherwise use Pi, or the sole usable harness.
+2. **Harness:** ask which harness to install only when none of Pi, OMP, or Claude is usable. Otherwise use Pi, or the sole usable harness.
 3. **Voice:** ask for transcription language and preferred Piper voice only when no compatible local models exist. Keep this as one question and state the download size when known.
 4. **Elevated capabilities:** ask before adding write roots, operator commands, web research, remote access, or any authenticated proxy. A normal first run stays read-only and localhost-only.
 
@@ -45,7 +75,7 @@ Do not ask the user for facts the machine can provide: operating system, CPU arc
 
 The agent should then execute this sequence:
 
-1. Install or update Node.js only if it is older than version 22, then run `npm run install:all`.
+1. Install or update Node.js only if it is older than version 22, then run `npm run install:all` and `npm run setup`.
 2. Run `npm run smoke:offline` before configuring or invoking a model provider.
 3. Copy `profiles/sample/` into the platform-standard user profile directory, keeping the directory name and manifest ID as `sample`.
 4. Create the ignored `.env` from `.env.example`, replacing every placeholder used by the selected setup with an absolute path.
@@ -121,22 +151,46 @@ Use absolute paths for speech model files. Paths may contain spaces and are pass
 
 ## 4. Install an agent harness
 
-Pi is the default. Install the current Pi coding agent, start it once, and use `/login` to authenticate a provider:
+### Pi — default
+
+Install the current Pi coding agent, start it once, and use `/login` to
+authenticate a provider:
 
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 pi
 ```
 
-Confirm `pi --version` succeeds, then set `BOB_PI_BINARY=pi`. If Pi is installed somewhere outside `PATH`, use its absolute executable path instead.
+Confirm `pi --version` succeeds. Pi remains Bob's default harness.
 
-Claude CLI is optional. To use it, install and authenticate Claude Code, set `BOB_CLAUDE_BINARY` if it is not on `PATH`, and select:
+### OMP — optional
+
+Install [Oh My Pi](https://github.com/can1357/oh-my-pi) using one of its
+supported installers. For macOS or Linux:
+
+```bash
+curl -fsSL https://omp.sh/install | sh
+omp
+```
+
+Authenticate a provider, confirm `omp --version` succeeds, then select:
+
+```dotenv
+BOB_AGENT_HARNESS=omp
+BOB_OMP_BINARY=omp
+```
+
+Bob uses OMP's documented RPC protocol, `agent_end` completion event, isolated
+session directory, explicit profile extensions, and `--resume` continuation.
+
+### Claude CLI — optional
+
+Install and authenticate Claude Code, set `BOB_CLAUDE_BINARY` if it is not on
+`PATH`, and select:
 
 ```dotenv
 BOB_AGENT_HARNESS=claude
 ```
-
-Bob supports Pi and Claude CLI. It does not contain an OMP adapter.
 
 ## 5. Install local speech tools
 
@@ -201,13 +255,20 @@ This starts cache mode on `127.0.0.1:8787` and token mode on `127.0.0.1:8788`, w
 
 ## Remote access
 
-To accept a named host on a trusted network, bind Vite to the network interface and declare each accepted hostname:
+Bob refuses non-loopback API or UI binding unless remote proxy mode is explicit.
+Keep Bob on localhost whenever possible and reach it through an SSH tunnel or
+private authenticated proxy.
+
+For a reverse-proxied installation, configure exact HTTPS origins and hostnames:
 
 ```dotenv
+BOB_REMOTE_MODE=proxy
+BOB_HOST=0.0.0.0
 BOB_UI_HOST=0.0.0.0
-BOB_UI_ALLOWED_HOSTS=localhost,127.0.0.1,my-machine.local
+BOB_ALLOWED_ORIGINS=https://bob.example.com
+BOB_UI_ALLOWED_HOSTS=bob.example.com
 ```
 
-The API may remain bound to `127.0.0.1`; browser requests under `/api` are proxied by Vite. Bob has no authentication, so only use this development configuration on a trusted network.
-
-Bob has no built-in login or tenant boundary. Keep the default localhost binding. For remote access, put Bob behind an authenticated HTTPS reverse proxy or use a local SSH tunnel. Do not expose the development servers directly to a LAN or the public internet.
+Wildcard origins and host allowlists are rejected. `BOB_REMOTE_MODE=proxy` is
+an explicit acknowledgement, not authentication: the reverse proxy must still
+provide HTTPS and authentication. Bob has no built-in login or tenant boundary.

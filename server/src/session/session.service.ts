@@ -50,7 +50,7 @@ export class SessionService {
 
     if (!isAgentHarness(agentHarness)) {
       throw new BadRequestException(
-        `Unknown agent harness '${String(agentHarness)}'. Valid harnesses: claude, pi`,
+        `Unknown agent harness '${String(agentHarness)}'. Valid harnesses: claude, omp, pi`,
       );
     }
 

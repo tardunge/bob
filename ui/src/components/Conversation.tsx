@@ -7,6 +7,11 @@ import { audioUrlForMessage, fetchAudioBlob, playAudioBlob } from '../services/a
 import { bobChime } from '../services/bobChime';
 import { AgentWorkList } from './AgentWorkList';
 import { parseServerTimestamp } from '../utils/time';
+import { CapabilityPreflight } from './CapabilityPreflight';
+import {
+  fetchProfiles,
+  type ProfileOption,
+} from '../services/profilesApi';
 
 type PlaybackState = 'idle' | 'loading' | 'playing' | 'expired' | 'error';
 
@@ -170,6 +175,36 @@ function MessageBubble({ message }: { message: Message }) {
 export function Conversation() {
   const { currentSession } = useSession();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const profileId = currentSession?.profile;
+  const [loadedProfile, setLoadedProfile] = useState<{
+    id: string;
+    profile: ProfileOption | null;
+  } | null>(null);
+  const profile =
+    loadedProfile && loadedProfile.id === profileId
+      ? loadedProfile.profile
+      : null;
+
+  useEffect(() => {
+    if (!profileId) return;
+    let cancelled = false;
+    void fetchProfiles()
+      .then(({ profiles }) => {
+        if (!cancelled) {
+          setLoadedProfile({
+            id: profileId,
+            profile: profiles.find((option) => option.id === profileId) ?? null,
+          });
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load profile capabilities:', error);
+        if (!cancelled) setLoadedProfile({ id: profileId, profile: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -202,23 +237,11 @@ export function Conversation() {
     <div className="flex-1 overflow-y-auto p-4">
       <AgentWorkList />
       {currentSession.messages.length === 0 ? (
-        <div className="h-full flex items-center justify-center text-slate-400">
-          <div className="text-center">
-            <svg
-              className="w-12 h-12 mx-auto mb-3 text-slate-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-              />
-            </svg>
-            <p>Press the button below to start talking</p>
-          </div>
+        <div className="min-h-full flex flex-col items-center justify-center gap-4 py-6">
+          {profile ? <CapabilityPreflight profile={profile} /> : null}
+          <p className="text-slate-400 text-sm">
+            Review the active boundaries, then press the button below to talk.
+          </p>
         </div>
       ) : (
         <>

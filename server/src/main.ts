@@ -1,8 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { isOfflineTestMode } from './agent/offline-runtime.service';
+import { assertSafeServerNetwork } from './network-policy';
 
 async function bootstrap() {
+  assertSafeServerNetwork();
   const app = await NestFactory.create(AppModule);
   app.enableShutdownHooks();
 

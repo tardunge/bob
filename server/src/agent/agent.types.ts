@@ -1,9 +1,10 @@
 import type { ProfileConfig, SessionProfile } from '../profiles';
 
-export type AgentHarness = 'claude' | 'pi';
+export type AgentHarness = 'claude' | 'omp' | 'pi';
 
 export const VALID_AGENT_HARNESSES: ReadonlySet<AgentHarness> = new Set([
   'claude',
+  'omp',
   'pi',
 ]);
 
@@ -13,7 +14,7 @@ export function getDefaultAgentHarness(
   const value = env.BOB_AGENT_HARNESS || 'pi';
   if (!VALID_AGENT_HARNESSES.has(value as AgentHarness)) {
     throw new Error(
-      `Invalid BOB_AGENT_HARNESS '${value}'. Valid harnesses: claude, pi`,
+      `Invalid BOB_AGENT_HARNESS '${value}'. Valid harnesses: claude, omp, pi`,
     );
   }
   return value as AgentHarness;
@@ -38,7 +39,7 @@ export interface AgentUsage {
   cacheCreationTokens: number;
   costUsd: number;
   contextWindow: number;
-  /** Actual current context size when the provider reports it (Pi). */
+  /** Actual current context size when the provider reports it (Pi or OMP). */
   contextTokens?: number;
 }
 export interface AgentRuntimeCapabilities {

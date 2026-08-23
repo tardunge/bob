@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import {
   DEFAULT_PROFILE,
   getProfileConfig,
@@ -72,17 +72,22 @@ export class ClaudeService implements AgentRuntime {
   ): string | null {
     if (!source) return null;
     const raw = readFileSync(source, 'utf8');
-    if (!raw.includes('${PROFILE_DIR}') && !raw.includes('${DATABASE_PATH}')) {
+    if (
+      !raw.includes('${PROFILE_DIR}') &&
+      !raw.includes('${DATABASE_PATH}') &&
+      !raw.includes('${BOB_REPOSITORY_ROOT}')
+    ) {
       return source;
     }
     const databasePath =
       process.env.DATABASE_PATH || join(process.cwd(), 'bob.db');
-    const resolved = raw
+    const resolvedConfig = raw
       .replaceAll('${PROFILE_DIR}', profilePath)
-      .replaceAll('${DATABASE_PATH}', databasePath);
-    JSON.parse(resolved);
+      .replaceAll('${DATABASE_PATH}', databasePath)
+      .replaceAll('${BOB_REPOSITORY_ROOT}', resolve(__dirname, '../../..'));
+    JSON.parse(resolvedConfig);
     const target = join(tmpdir(), `bob-${profileId}-mcp.json`);
-    writeFileSync(target, resolved, { mode: 0o600 });
+    writeFileSync(target, resolvedConfig, { mode: 0o600 });
     return target;
   }
 

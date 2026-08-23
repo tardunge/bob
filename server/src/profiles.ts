@@ -19,21 +19,25 @@ export interface ProfileConfig {
   displayName: string;
   description: string;
   path: string;
-  defaultHarness: 'pi' | 'claude';
+  defaultHarness: 'pi' | 'omp' | 'claude';
   cwd: string;
   systemPrompt: string | null;
   systemPromptPath: string | null;
   readRoots: string[];
   allowedTools: string[];
   writeRoots: string[];
+  operatorCommands: string[];
+  additionalTools: string[];
+  webResearch: boolean;
   timeoutMs: number;
-  models: { pi?: string; claude?: string };
+  models: { pi?: string; omp?: string; claude?: string };
   piperModelPath: string | null;
   whisperPrompt: string | null;
   whisperTimeoutMs: number;
   skillsPath: string | null;
   mcpConfigPath: string | null;
   piExtensions: string[];
+  ompExtensions: string[];
 }
 
 interface ProfileManifest {
@@ -42,8 +46,8 @@ interface ProfileManifest {
   displayName: string;
   description?: string;
   systemPrompt?: string | null;
-  defaultHarness?: 'pi' | 'claude';
-  models?: { pi?: string; claude?: string };
+  defaultHarness?: 'pi' | 'omp' | 'claude';
+  models?: { pi?: string; omp?: string; claude?: string };
   voice?: {
     whisperPrompt?: string | null;
     whisperTimeoutMs?: number;
@@ -59,6 +63,7 @@ interface ProfileManifest {
   skillsDirectory?: string | null;
   mcpConfig?: string | null;
   piExtensions?: string[];
+  ompExtensions?: string[];
   timeoutMs?: number;
 }
 
@@ -209,9 +214,17 @@ export function loadProfiles(
       ...commands.map((command) => `Bash(${command}:*)`),
       ...additionalTools,
     ];
-    const configuredHarness = env.BOB_AGENT_HARNESS ?? manifest.defaultHarness ?? 'pi';
-    if (configuredHarness !== 'pi' && configuredHarness !== 'claude') {
-      profileError(manifestPath, `unsupported default harness '${configuredHarness}'`);
+    const configuredHarness =
+      env.BOB_AGENT_HARNESS ?? manifest.defaultHarness ?? 'pi';
+    if (
+      configuredHarness !== 'pi' &&
+      configuredHarness !== 'omp' &&
+      configuredHarness !== 'claude'
+    ) {
+      profileError(
+        manifestPath,
+        `unsupported default harness '${configuredHarness}'`,
+      );
     }
 
     profiles[id] = {
@@ -226,6 +239,9 @@ export function loadProfiles(
       readRoots,
       allowedTools,
       writeRoots,
+      operatorCommands: commands,
+      additionalTools,
+      webResearch: permissions.webResearch === true,
       timeoutMs: manifest.timeoutMs ?? 600_000,
       models: manifest.models ?? {},
       piperModelPath: resolveProfilePath(
@@ -239,6 +255,11 @@ export function loadProfiles(
       piExtensions: stringArray(
         manifest.piExtensions,
         'piExtensions',
+        manifestPath,
+      ).map((path) => resolveProfilePath(profilePath, path)!),
+      ompExtensions: stringArray(
+        manifest.ompExtensions,
+        'ompExtensions',
         manifestPath,
       ).map((path) => resolveProfilePath(profilePath, path)!),
     };

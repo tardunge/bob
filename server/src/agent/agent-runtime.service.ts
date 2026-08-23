@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ClaudeService } from '../claude/claude.service';
 import { PiRpcService } from '../pi/pi-rpc.service';
+import { OmpService } from '../omp/omp.service';
 import {
   isOfflineTestMode,
   OfflineRuntimeService,
@@ -21,16 +22,17 @@ export class AgentRuntimeService {
   constructor(
     claude: ClaudeService,
     pi: PiRpcService,
+    omp: OmpService,
     private readonly offline: OfflineRuntimeService,
   ) {
-    this.runtimes = { claude, pi };
+    this.runtimes = { claude, omp, pi };
   }
   capabilitiesFor(harness: AgentHarness): AgentRuntimeCapabilities {
     if (isOfflineTestMode()) {
       return {
-        background: harness === 'pi',
-        recursiveTermination: harness === 'pi',
-        enforcedWriteRoots: harness === 'pi',
+        background: harness === 'pi' || harness === 'omp',
+        recursiveTermination: harness === 'pi' || harness === 'omp',
+        enforcedWriteRoots: harness === 'pi' || harness === 'omp',
       };
     }
     const runtime = this.runtimes[harness];

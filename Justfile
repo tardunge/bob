@@ -7,6 +7,14 @@ root := justfile_directory()
 install:
     npm run install:all
 
+# Configure a private localhost installation interactively.
+setup:
+    npm run setup
+
+# Validate configuration, runtimes, speech tools, and network policy.
+doctor:
+    npm run doctor
+
 dev:
     npm run dev
 

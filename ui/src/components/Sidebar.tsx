@@ -293,7 +293,7 @@ export function Sidebar() {
       </div>
 
       <div className="p-4 border-t border-slate-700 text-slate-500 text-xs">
-        Local · Pi or Claude CLI
+        Local · Pi, OMP, or Claude CLI
       </div>
     </div>
   );

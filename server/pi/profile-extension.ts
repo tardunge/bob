@@ -9,6 +9,7 @@ import {
   sep,
 } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { z } from 'zod';
 
 function canonicalizeCandidate(path: string, depth = 0): string {
   if (depth > 40) throw new Error(`Too many symbolic links in write path: ${path}`);
@@ -56,20 +57,33 @@ export default function bobProfileExtension(pi: ExtensionAPI) {
     ? readFileSync(systemPromptPath, 'utf8').trim()
     : '';
   const skillsPath = process.env.BOB_SKILLS_PATH;
-  const writeRoots = JSON.parse(
-    process.env.BOB_WRITE_ROOTS_JSON || '[]',
-  ) as string[];
+  const stringArray = z.array(z.string());
+  const writeRoots = stringArray.parse(
+    JSON.parse(process.env.BOB_WRITE_ROOTS_JSON || '[]'),
+  );
+  const additionalTools = stringArray.parse(
+    JSON.parse(process.env.BOB_ADDITIONAL_TOOLS_JSON || '[]'),
+  );
+  const webResearch = process.env.BOB_PROFILE_WEB_RESEARCH === 'true';
 
   pi.on('session_start', () => {
-    const active = new Set(pi.getActiveTools());
-    for (const tool of ['read', 'grep', 'find', 'ls']) active.add(tool);
+    const available = new Set(pi.getActiveTools());
+    const active = new Set(
+      ['read', 'grep', 'find', 'ls', 'glob'].filter((tool) =>
+        available.has(tool),
+      ),
+    );
     if (writeRoots.length > 0) {
-      active.add('edit');
-      active.add('write');
-    } else {
-      active.delete('edit');
-      active.delete('write');
+      for (const tool of ['edit', 'write']) {
+        if (available.has(tool)) active.add(tool);
+      }
     }
+    if (webResearch) {
+      for (const tool of ['web_search', 'web_fetch', 'WebSearch', 'WebFetch']) {
+        if (available.has(tool)) active.add(tool);
+      }
+    }
+    for (const tool of additionalTools) active.add(tool);
     active.delete('bash');
     pi.setActiveTools([...active]);
   });

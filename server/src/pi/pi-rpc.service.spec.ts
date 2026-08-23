@@ -1,11 +1,16 @@
 import { PiRpcService } from './pi-rpc.service';
 
+class TestPiRpcService extends PiRpcService {
+  usage(data: unknown, previousData?: unknown) {
+    return this.extractUsage(data, previousData);
+  }
+}
+
 describe('PiRpcService usage mapping', () => {
-  it('converts cumulative Pi stats into per-turn usage', () => {
-    const service = new PiRpcService();
-    const extract = (service as any).extractUsage.bind(service);
+  it('converts cumulative RPC stats into per-turn usage', () => {
+    const service = new TestPiRpcService();
     expect(
-      extract(
+      service.usage(
         {
           tokens: { input: 130, output: 25, cacheRead: 90, cacheWrite: 10 },
           cost: 0.42,
@@ -13,7 +18,7 @@ describe('PiRpcService usage mapping', () => {
         },
         {
           tokens: { input: 100, output: 20, cacheRead: 70, cacheWrite: 5 },
-          cost: 0.30,
+          cost: 0.3,
         },
       ),
     ).toEqual({

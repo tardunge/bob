@@ -18,6 +18,9 @@ const config: ProfileConfig = {
   readRoots: ['.'],
   allowedTools: ['WebSearch'],
   writeRoots: ['docs'],
+  operatorCommands: [],
+  additionalTools: [],
+  webResearch: true,
   timeoutMs: 600_000,
   models: { claude: 'claude-opus-4-8' },
   piperModelPath: null,
@@ -26,6 +29,7 @@ const config: ProfileConfig = {
   skillsPath: null,
   mcpConfigPath: null,
   piExtensions: [],
+  ompExtensions: [],
 };
 
 const base = { userMessage: 'hello bob', config, mcpConfigPath: '/app/mcp.json' };

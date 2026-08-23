@@ -53,10 +53,13 @@ export function getModelOptions(
     }));
   }
 
-  // Pi owns its provider catalog. Qualifying the defaults is important: Pi's
-  // bare gpt ids can resolve to a different provider (for example Azure),
-  // which then uses the wrong credential store.
-  const configured = env.BOB_PI_MODELS || env.PI_MODELS;
+  // Pi and OMP own their provider catalogs. Qualifying the defaults is
+  // important: bare gpt ids can resolve to a different provider (for example
+  // Azure), which then uses the wrong credential store.
+  const configured =
+    harness === 'omp'
+      ? env.BOB_OMP_MODELS || env.OMP_MODELS
+      : env.BOB_PI_MODELS || env.PI_MODELS;
   if (!configured) return [...DEFAULT_PI_MODELS];
   return configured
     .split(',')

@@ -54,6 +54,7 @@ describe('profiles', () => {
     mkdirSync(join(profile, 'extensions'), { recursive: true });
     writeFileSync(join(profile, 'SYSTEM.md'), 'Custom prompt');
     writeFileSync(join(profile, 'extensions', 'pi.ts'), 'export default () => {}');
+    writeFileSync(join(profile, 'extensions', 'omp.ts'), 'export default () => {}');
     writeFileSync(
       join(profile, 'profile.json'),
       JSON.stringify({
@@ -70,6 +71,7 @@ describe('profiles', () => {
         },
         skillsDirectory: 'skills',
         piExtensions: ['extensions/pi.ts'],
+        ompExtensions: ['extensions/omp.ts'],
       }),
     );
 
@@ -89,9 +91,14 @@ describe('profiles', () => {
         'Skill',
         'Bash(just:*)',
       ]);
+      expect(loaded.operatorCommands).toEqual(['just']);
+      expect(loaded.webResearch).toBe(true);
       expect(loaded.skillsPath).toBe(join(profile, 'skills'));
       expect(loaded.piExtensions).toEqual([
         join(profile, 'extensions', 'pi.ts'),
+      ]);
+      expect(loaded.ompExtensions).toEqual([
+        join(profile, 'extensions', 'omp.ts'),
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

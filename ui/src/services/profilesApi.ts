@@ -1,7 +1,34 @@
+import type { AgentHarness } from '../types/session';
+
+export interface ProfileCapabilities {
+  workspace: string;
+  backgroundWork: boolean;
+  read: {
+    roots: string[];
+    enforcement: 'harness-settings' | 'workspace-process';
+  };
+  write: {
+    roots: string[];
+    enforcement: 'disabled' | 'bob-extension' | 'harness-settings';
+  };
+  operatorCommands: {
+    declared: string[];
+    effective: string[];
+  };
+  webResearch: boolean;
+  mcp: {
+    configured: boolean;
+    effective: boolean;
+  };
+  extensions: number;
+}
+
 export interface ProfileOption {
   id: string;
   displayName: string;
   description: string;
+  defaultHarness: AgentHarness;
+  capabilities: ProfileCapabilities;
 }
 
 interface ProfilesResponse {
